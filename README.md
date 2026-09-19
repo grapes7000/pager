@@ -5,7 +5,7 @@ ESP32-based wireless hardware messenger.
 ## Prototype hardware
 
 - ESP32-WROOM dev board
-- 128x64 SSD1306 I2C OLED
+- 128x64 SH1106 I2C OLED at 0x3C
 - KY-040 rotary encoder
 
 | Device | ESP32 |
