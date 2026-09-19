@@ -19,7 +19,7 @@ void BleKeyboardHost::begin() {
 
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    nvs_flash_erase();
+    ESP_ERROR_CHECK(nvs_flash_erase());
     err = nvs_flash_init();
   }
   if (err != ESP_OK) {
@@ -27,33 +27,56 @@ void BleKeyboardHost::begin() {
     return;
   }
 
-  // Pager only needs Bluetooth Classic for this keyboard. Releasing BLE RAM also
-  // keeps the small ESP32-WROOM build comfortably within memory limits.
-  esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+  // Arduino may leave individual Bluetooth layers in different states. Bring
+  // each layer up only when it actually needs initialization/enabling.
+  esp_bt_controller_status_t controller = esp_bt_controller_get_status();
+  if (controller == ESP_BT_CONTROLLER_STATUS_IDLE) {
+    esp_bt_controller_config_t btCfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    err = esp_bt_controller_init(&btCfg);
+    if (err != ESP_OK) {
+      Serial.printf("[BT] controller init failed: %s\n", esp_err_to_name(err));
+      return;
+    }
+    controller = esp_bt_controller_get_status();
+  }
 
-  esp_bt_controller_config_t btCfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  err = esp_bt_controller_init(&btCfg);
-  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[BT] controller init failed: %s\n", esp_err_to_name(err));
-    return;
-  }
-  err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[BT] controller enable failed: %s\n", esp_err_to_name(err));
-    return;
-  }
-  err = esp_bluedroid_init();
-  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[BT] Bluedroid init failed: %s\n", esp_err_to_name(err));
-    return;
-  }
-  err = esp_bluedroid_enable();
-  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[BT] Bluedroid enable failed: %s\n", esp_err_to_name(err));
+  if (controller == ESP_BT_CONTROLLER_STATUS_INITED) {
+    err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+    if (err != ESP_OK) {
+      Serial.printf("[BT] controller enable failed: %s\n", esp_err_to_name(err));
+      return;
+    }
+  } else if (controller != ESP_BT_CONTROLLER_STATUS_ENABLED) {
+    Serial.printf("[BT] unexpected controller state: %d\n", (int)controller);
     return;
   }
 
-  esp_bt_gap_register_callback(gapCallback);
+  esp_bluedroid_status_t bluedroid = esp_bluedroid_get_status();
+  if (bluedroid == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
+    err = esp_bluedroid_init();
+    if (err != ESP_OK) {
+      Serial.printf("[BT] Bluedroid init failed: %s\n", esp_err_to_name(err));
+      return;
+    }
+    bluedroid = esp_bluedroid_get_status();
+  }
+
+  if (bluedroid == ESP_BLUEDROID_STATUS_INITIALIZED) {
+    err = esp_bluedroid_enable();
+    if (err != ESP_OK) {
+      Serial.printf("[BT] Bluedroid enable failed: %s\n", esp_err_to_name(err));
+      return;
+    }
+  } else if (bluedroid != ESP_BLUEDROID_STATUS_ENABLED) {
+    Serial.printf("[BT] unexpected Bluedroid state: %d\n", (int)bluedroid);
+    return;
+  }
+
+  err = esp_bt_gap_register_callback(gapCallback);
+  if (err != ESP_OK) {
+    Serial.printf("[BT] GAP callback failed: %s\n", esp_err_to_name(err));
+    return;
+  }
 
   esp_hidh_config_t hidCfg = {};
   hidCfg.callback = hidCallback;
@@ -67,7 +90,9 @@ void BleKeyboardHost::begin() {
 
   initialized_ = true;
   hidReady_ = true;
-  Serial.println("[BT] official ESP-IDF Classic HID host ready");
+  Serial.printf("[BT] Classic HID ready (controller=%d, bluedroid=%d)\n",
+                (int)esp_bt_controller_get_status(),
+                (int)esp_bluedroid_get_status());
   startInquiry();
 }
 
