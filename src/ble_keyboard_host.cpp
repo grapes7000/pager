@@ -67,15 +67,19 @@ void BleKeyboardHost::begin() {
     return;
   }
 
-  esp_hidh_config_t hidCfg = {};
-  hidCfg.callback = hidCallback;
-  hidCfg.event_stack_size = 4096;
-  hidCfg.callback_arg = this;
-  Serial.println("[BT] calling esp_hidh_init...");
-  err = esp_hidh_init(&hidCfg);
-  Serial.printf("[BT] esp_hidh_init returned: %s\n", esp_err_to_name(err));
+  Serial.println("[BT] registering native Classic HID host callback...");
+  err = esp_bt_hid_host_register_callback(hidCallback);
+  Serial.printf("[BT] HID callback register returned: %s\n", esp_err_to_name(err));
   if (err != ESP_OK) {
-    Serial.printf("[BT] HID host init failed: %s\n", esp_err_to_name(err));
+    Serial.printf("[BT] HID callback registration failed: %s\n", esp_err_to_name(err));
+    return;
+  }
+
+  Serial.println("[BT] calling esp_bt_hid_host_init...");
+  err = esp_bt_hid_host_init();
+  Serial.printf("[BT] esp_bt_hid_host_init returned: %s\n", esp_err_to_name(err));
+  if (err != ESP_OK) {
+    Serial.printf("[BT] native Classic HID host init failed: %s\n", esp_err_to_name(err));
     return;
   }
 
@@ -111,10 +115,8 @@ void BleKeyboardHost::gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_par
   if (instance_) instance_->handleGapEvent(event, param);
 }
 
-void BleKeyboardHost::hidCallback(void* arg, esp_event_base_t, int32_t eventId, void* eventData) {
-  auto* self = static_cast<BleKeyboardHost*>(arg);
-  if (self) self->handleHidEvent(static_cast<esp_hidh_event_t>(eventId),
-                                 static_cast<esp_hidh_event_data_t*>(eventData));
+void BleKeyboardHost::hidCallback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param) {
+  if (instance_) instance_->handleHidEvent(event, param);
 }
 
 void BleKeyboardHost::handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param) {
@@ -166,9 +168,9 @@ void BleKeyboardHost::handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_
     if (targetFound_ && !connected_ && !connecting_) {
       connecting_ = true;
       Serial.println("[BT] opening Classic HID keyboard...");
-      esp_hidh_dev_t* dev = esp_hidh_dev_open(targetBda_, ESP_HID_TRANSPORT_BT, 0);
-      if (!dev) {
-        Serial.println("[BT] HID open start failed");
+      esp_err_t openErr = esp_bt_hid_host_connect(targetBda_);
+      if (openErr != ESP_OK) {
+        Serial.printf("[BT] HID connect start failed: %s\n", esp_err_to_name(openErr));
         connecting_ = false;
         targetFound_ = false;
         nextScanMs_ = millis() + 2500;
@@ -180,27 +182,38 @@ void BleKeyboardHost::handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_
   }
 }
 
-void BleKeyboardHost::handleHidEvent(esp_hidh_event_t event, esp_hidh_event_data_t* param) {
+void BleKeyboardHost::handleHidEvent(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param) {
   switch (event) {
-    case ESP_HIDH_OPEN_EVENT:
+    case ESP_HIDH_INIT_EVT:
+      Serial.printf("[BT] native HID host init event: status=%d\n", (int)param->init.status);
+      break;
+
+    case ESP_HIDH_OPEN_EVT:
       connecting_ = false;
-      if (param->open.status == ESP_OK) {
+      if (param->open.status == ESP_HIDH_OK &&
+          param->open.conn_status == ESP_HIDH_CONN_STATE_CONNECTED) {
         connected_ = true;
-        Serial.printf("[BT] keyboard connected: %s\n",
-                      esp_hidh_dev_name_get(param->open.dev));
+        Serial.println("[BT] keyboard connected");
+        esp_bt_hid_host_set_protocol(targetBda_, ESP_HIDH_BOOT_MODE);
       } else {
         connected_ = false;
         targetFound_ = false;
-        Serial.printf("[BT] keyboard open failed: %s\n", esp_err_to_name(param->open.status));
+        Serial.printf("[BT] keyboard open failed: status=%d conn=%d\n",
+                      (int)param->open.status, (int)param->open.conn_status);
         nextScanMs_ = millis() + 2500;
       }
       break;
 
-    case ESP_HIDH_INPUT_EVENT:
-      handleReport(param->input.data, param->input.length, param->input.report_id);
+    case ESP_HIDH_DATA_IND_EVT:
+      Serial.printf("[BT] input len=%u:", (unsigned)param->data_ind.len);
+      for (uint16_t i = 0; i < param->data_ind.len; ++i) {
+        Serial.printf(" %02x", param->data_ind.data[i]);
+      }
+      Serial.println();
+      handleReport(param->data_ind.data, param->data_ind.len, 0);
       break;
 
-    case ESP_HIDH_CLOSE_EVENT:
+    case ESP_HIDH_CLOSE_EVT:
       connected_ = false;
       connecting_ = false;
       targetFound_ = false;
