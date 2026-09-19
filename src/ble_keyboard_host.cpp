@@ -1,12 +1,5 @@
 #include "ble_keyboard_host.h"
 
-#include <cstring>
-#include <esp_bt.h>
-#include <esp_bt_device.h>
-#include <esp_bt_main.h>
-#include <esp32-hal-bt.h>
-#include <nvs_flash.h>
-
 BleKeyboardHost* BleKeyboardHost::instance_ = nullptr;
 
 bool BleKeyboardHost::looksLikeKeyboard(const String& name) {
@@ -15,269 +8,140 @@ bool BleKeyboardHost::looksLikeKeyboard(const String& name) {
   return lower.indexOf("keyboard") >= 0 || lower.indexOf("518") >= 0;
 }
 
+InputKey BleKeyboardHost::usageToKey(uint8_t usage, uint8_t ascii) {
+  if (usage == 0x28) return InputKey::Enter;
+  if (usage == 0x29) return InputKey::Escape;
+  if (usage == 0x2A) return InputKey::Backspace;
+  return InputKey::Character;
+}
+
 void BleKeyboardHost::begin() {
   instance_ = this;
+  Serial.println("[BT] starting EspBle Bluetooth Classic HID host...");
 
-  // Let Arduino's own BT HAL bring up the controller. Arduino's ESP32 core
-  // owns the controller lifecycle, so calling esp_bt_controller_init() here
-  // directly can return INVALID_STATE even immediately after boot.
-  Serial.printf("[BT] before btStart: started=%d controller=%d\n",
-                (int)btStarted(), (int)esp_bt_controller_get_status());
-  if (!btStarted() && !btStart()) {
-    Serial.println("[BT] Arduino Bluetooth controller start failed");
-    return;
-  }
+  auto& hid = bluetooth_.hidHost();
+  hid.setKeyboardLayout(EspBleKeyboardLayout::EnUs);
 
-  Serial.printf("[BT] after btStart: started=%d controller=%d\n",
-                (int)btStarted(), (int)esp_bt_controller_get_status());
-  esp_err_t err;
-  Serial.println("[BT] checking Bluedroid status...");
-  esp_bluedroid_status_t bluedroid = esp_bluedroid_get_status();
-  Serial.printf("[BT] Bluedroid status=%d\n", (int)bluedroid);
-  if (bluedroid == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
-    Serial.println("[BT] calling esp_bluedroid_init...");
-    err = esp_bluedroid_init();
-    Serial.printf("[BT] esp_bluedroid_init returned: %s\n", esp_err_to_name(err));
-    if (err != ESP_OK) {
-      Serial.printf("[BT] Bluedroid init failed: %s\n", esp_err_to_name(err));
-      return;
+  hid.onKeyboard([](const EspBleClassicHidKeyboardEvent& event) {
+    if (!instance_ || !event.pressed) return;
+
+    Serial.printf("[BT] key usage=0x%02x ascii=0x%02x\n",
+                  event.usage, event.ascii);
+
+    InputKey key = usageToKey(event.usage, event.ascii);
+    if (key == InputKey::Character) {
+      if (event.ascii) instance_->push(InputEvent(key, static_cast<char>(event.ascii)));
+    } else {
+      instance_->push(InputEvent(key));
     }
-    bluedroid = esp_bluedroid_get_status();
-    Serial.printf("[BT] Bluedroid status after init=%d\n", (int)bluedroid);
-  }
+  });
 
-  if (bluedroid == ESP_BLUEDROID_STATUS_INITIALIZED) {
-    Serial.println("[BT] calling esp_bluedroid_enable...");
-    err = esp_bluedroid_enable();
-    Serial.printf("[BT] esp_bluedroid_enable returned: %s\n", esp_err_to_name(err));
-    if (err != ESP_OK) {
-      Serial.printf("[BT] Bluedroid enable failed: %s\n", esp_err_to_name(err));
-      return;
+  hid.onInputReport([](const EspBleClassicHidReport& report) {
+    Serial.printf("[BT] raw HID report id=%u len=%u\n",
+                  report.reportId,
+                  static_cast<unsigned>(report.value.length()));
+  });
+
+  hid.onConnected([](const EspBleClassicHidConnection& connection) {
+    if (!instance_) return;
+    instance_->connected_ = true;
+    instance_->connecting_ = false;
+    instance_->scanning_ = false;
+    Serial.printf("[BT] keyboard connected: %s\n", connection.peerAddress.c_str());
+  });
+
+  hid.onConnectionFailed([](const EspBleClassicHidConnectionFailure& failure) {
+    if (!instance_) return;
+    instance_->connected_ = false;
+    instance_->connecting_ = false;
+    instance_->targetAddress_ = "";
+    instance_->nextScanMs_ = millis() + 2500;
+    Serial.printf("[BT] keyboard connection failed: %s\n", failure.detail.c_str());
+  });
+
+  bluetooth_.inquiry().onResult([](const EspBleClassicInquiryResult& result) {
+    if (!instance_) return;
+
+    Serial.printf("[BT] Classic seen: %s", result.address.c_str());
+    if (!result.name.isEmpty()) Serial.printf(" name=%s", result.name.c_str());
+    if (result.hasRssi) Serial.printf(" rssi=%d", result.rssi);
+    Serial.println();
+
+    String name(result.name.c_str());
+    if (instance_->targetAddress_.isEmpty() && looksLikeKeyboard(name)) {
+      instance_->targetAddress_ = result.address.c_str();
+      Serial.printf("[BT] keyboard matched: %s name=%s\n",
+                    result.address.c_str(), result.name.c_str());
+      bluetooth_.inquiry().stop();
     }
-  } else if (bluedroid != ESP_BLUEDROID_STATUS_ENABLED) {
-    Serial.printf("[BT] unexpected Bluedroid state: %d\n", (int)bluedroid);
+  });
+
+  bluetooth_.inquiry().onComplete([](const EspBleClassicInquiryComplete&) {
+    if (!instance_) return;
+    instance_->scanning_ = false;
+
+    if (!instance_->targetAddress_.isEmpty() &&
+        !instance_->connected_ && !instance_->connecting_) {
+      instance_->connecting_ = true;
+      Serial.printf("[BT] connecting HID host to %s...\n",
+                    instance_->targetAddress_.c_str());
+      if (!instance_->bluetooth_.hidHost().connect(instance_->targetAddress_.c_str())) {
+        Serial.printf("[BT] connect request rejected: %s\n",
+                      instance_->bluetooth_.lastErrorDetail().c_str());
+        instance_->connecting_ = false;
+        instance_->targetAddress_ = "";
+        instance_->nextScanMs_ = millis() + 2500;
+      }
+    } else if (!instance_->connected_) {
+      Serial.println("[BT] no matching keyboard found; will rescan");
+      instance_->nextScanMs_ = millis() + 2000;
+    }
+  });
+
+  EspBleClassicConfig config;
+  config.deviceName = "Pager Keyboard Host";
+  if (!bluetooth_.begin(config)) {
+    Serial.printf("[BT] Classic init failed: %s: %s\n",
+                  bluetooth_.lastErrorName(),
+                  bluetooth_.lastErrorDetail().c_str());
     return;
   }
 
-  Serial.println("[BT] registering GAP callback...");
-  err = esp_bt_gap_register_callback(gapCallback);
-  Serial.printf("[BT] GAP callback register returned: %s\n", esp_err_to_name(err));
-  if (err != ESP_OK) {
-    Serial.printf("[BT] GAP callback failed: %s\n", esp_err_to_name(err));
-    return;
-  }
-
-  Serial.println("[BT] registering native Classic HID host callback...");
-  err = esp_bt_hid_host_register_callback(hidCallback);
-  Serial.printf("[BT] HID callback register returned: %s\n", esp_err_to_name(err));
-  if (err != ESP_OK) {
-    Serial.printf("[BT] HID callback registration failed: %s\n", esp_err_to_name(err));
-    return;
-  }
-
-  Serial.println("[BT] calling esp_bt_hid_host_init...");
-  err = esp_bt_hid_host_init();
-  Serial.printf("[BT] esp_bt_hid_host_init returned: %s\n", esp_err_to_name(err));
-  if (err != ESP_OK) {
-    Serial.printf("[BT] native Classic HID host init failed: %s\n", esp_err_to_name(err));
+  if (!hid.begin()) {
+    Serial.printf("[BT] HID host init failed: %s: %s\n",
+                  bluetooth_.lastErrorName(),
+                  bluetooth_.lastErrorDetail().c_str());
     return;
   }
 
   initialized_ = true;
-  hidReady_ = true;
-  Serial.printf("[BT] Classic HID ready (controller=%d, bluedroid=%d)\n",
-                (int)esp_bt_controller_get_status(),
-                (int)esp_bluedroid_get_status());
+  Serial.println("[BT] Classic HID host ready");
   startInquiry();
 }
 
 void BleKeyboardHost::startInquiry() {
   if (!initialized_ || scanning_ || connecting_ || connected_) return;
-  targetFound_ = false;
+
+  targetAddress_ = "";
+  EspBleClassicInquiryConfig config;
+  config.durationSeconds = 8;
+
   Serial.println("[BT] scanning Bluetooth Classic devices...");
-  esp_err_t err = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 8, 0);
-  if (err == ESP_OK) {
+  if (bluetooth_.inquiry().start(config)) {
     scanning_ = true;
   } else {
-    Serial.printf("[BT] inquiry start failed: %s\n", esp_err_to_name(err));
+    Serial.printf("[BT] inquiry start failed: %s\n",
+                  bluetooth_.lastErrorDetail().c_str());
     nextScanMs_ = millis() + 3000;
   }
 }
 
 void BleKeyboardHost::update() {
-  if (!connected_ && !scanning_ && !connecting_ &&
+  bluetooth_.update();
+
+  if (initialized_ && !connected_ && !scanning_ && !connecting_ &&
       static_cast<int32_t>(millis() - nextScanMs_) >= 0) {
     startInquiry();
-  }
-}
-
-void BleKeyboardHost::gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param) {
-  if (instance_) instance_->handleGapEvent(event, param);
-}
-
-void BleKeyboardHost::hidCallback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param) {
-  if (instance_) instance_->handleHidEvent(event, param);
-}
-
-void BleKeyboardHost::handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param) {
-  if (event == ESP_BT_GAP_DISC_RES_EVT) {
-    String name;
-    int8_t rssi = 0;
-    bool haveRssi = false;
-
-    for (int i = 0; i < param->disc_res.num_prop; ++i) {
-      esp_bt_gap_dev_prop_t& p = param->disc_res.prop[i];
-      if (p.type == ESP_BT_GAP_DEV_PROP_BDNAME && p.val && p.len) {
-        name = String(static_cast<const char*>(p.val), p.len);
-      } else if (p.type == ESP_BT_GAP_DEV_PROP_EIR && p.val) {
-        uint8_t len = 0;
-        uint8_t* found = esp_bt_gap_resolve_eir_data(
-            static_cast<uint8_t*>(p.val), ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &len);
-        if (!found) {
-          found = esp_bt_gap_resolve_eir_data(
-              static_cast<uint8_t*>(p.val), ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &len);
-        }
-        if (found && len) name = String(reinterpret_cast<const char*>(found), len);
-      } else if (p.type == ESP_BT_GAP_DEV_PROP_RSSI && p.val) {
-        rssi = *static_cast<int8_t*>(p.val);
-        haveRssi = true;
-      }
-    }
-
-    char addr[18];
-    snprintf(addr, sizeof(addr), "%02x:%02x:%02x:%02x:%02x:%02x",
-             param->disc_res.bda[0], param->disc_res.bda[1], param->disc_res.bda[2],
-             param->disc_res.bda[3], param->disc_res.bda[4], param->disc_res.bda[5]);
-    Serial.printf("[BT] Classic seen: %s", addr);
-    if (name.length()) Serial.printf(" name=%s", name.c_str());
-    if (haveRssi) Serial.printf(" rssi=%d", rssi);
-    Serial.println();
-
-    if (!targetFound_ && name.length() && looksLikeKeyboard(name)) {
-      memcpy(targetBda_, param->disc_res.bda, ESP_BD_ADDR_LEN);
-      targetFound_ = true;
-      Serial.printf("[BT] keyboard matched: %s name=%s\n", addr, name.c_str());
-      esp_bt_gap_cancel_discovery();
-    }
-    return;
-  }
-
-  if (event == ESP_BT_GAP_DISC_STATE_CHANGED_EVT &&
-      param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
-    scanning_ = false;
-    if (targetFound_ && !connected_ && !connecting_) {
-      connecting_ = true;
-      Serial.println("[BT] opening Classic HID keyboard...");
-      esp_err_t openErr = esp_bt_hid_host_connect(targetBda_);
-      if (openErr != ESP_OK) {
-        Serial.printf("[BT] HID connect start failed: %s\n", esp_err_to_name(openErr));
-        connecting_ = false;
-        targetFound_ = false;
-        nextScanMs_ = millis() + 2500;
-      }
-    } else if (!connected_) {
-      Serial.println("[BT] no matching keyboard found; will rescan");
-      nextScanMs_ = millis() + 2000;
-    }
-  }
-}
-
-void BleKeyboardHost::handleHidEvent(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param) {
-  switch (event) {
-    case ESP_HIDH_INIT_EVT:
-      Serial.printf("[BT] native HID host init event: status=%d\n", (int)param->init.status);
-      break;
-
-    case ESP_HIDH_OPEN_EVT:
-      connecting_ = false;
-      if (param->open.status == ESP_HIDH_OK &&
-          param->open.conn_status == ESP_HIDH_CONN_STATE_CONNECTED) {
-        connected_ = true;
-        Serial.println("[BT] keyboard connected");
-        esp_bt_hid_host_set_protocol(targetBda_, ESP_HIDH_BOOT_MODE);
-      } else {
-        connected_ = false;
-        targetFound_ = false;
-        Serial.printf("[BT] keyboard open failed: status=%d conn=%d\n",
-                      (int)param->open.status, (int)param->open.conn_status);
-        nextScanMs_ = millis() + 2500;
-      }
-      break;
-
-    case ESP_HIDH_DATA_IND_EVT:
-      Serial.printf("[BT] input len=%u:", (unsigned)param->data_ind.len);
-      for (uint16_t i = 0; i < param->data_ind.len; ++i) {
-        Serial.printf(" %02x", param->data_ind.data[i]);
-      }
-      Serial.println();
-      handleReport(param->data_ind.data, param->data_ind.len, 0);
-      break;
-
-    case ESP_HIDH_CLOSE_EVT:
-      connected_ = false;
-      connecting_ = false;
-      targetFound_ = false;
-      memset(previous_, 0, sizeof(previous_));
-      Serial.println("[BT] keyboard disconnected");
-      nextScanMs_ = millis() + 2000;
-      break;
-
-    default:
-      break;
-  }
-}
-
-void BleKeyboardHost::handleReport(const uint8_t* data, size_t length, uint16_t) {
-  // Standard keyboard report: modifiers, reserved, six key usages.
-  if (!data || length < 8) return;
-  const bool shift = (data[0] & 0x22) != 0;
-
-  for (size_t i = 2; i < 8; ++i) {
-    const uint8_t usage = data[i];
-    if (!usage) continue;
-
-    bool wasDown = false;
-    for (uint8_t old : previous_) {
-      if (old == usage) {
-        wasDown = true;
-        break;
-      }
-    }
-    if (wasDown) continue;
-
-    if (usage == 0x28) push(InputEvent(InputKey::Enter));
-    else if (usage == 0x29) push(InputEvent(InputKey::Escape));
-    else if (usage == 0x2A) push(InputEvent(InputKey::Backspace));
-    else {
-      char c = usageToAscii(usage, shift);
-      if (c) push(InputEvent(InputKey::Character, c));
-    }
-  }
-  memcpy(previous_, data + 2, 6);
-}
-
-char BleKeyboardHost::usageToAscii(uint8_t u, bool shift) {
-  if (u >= 0x04 && u <= 0x1D) {
-    char c = 'a' + (u - 0x04);
-    return shift ? static_cast<char>(c - 'a' + 'A') : c;
-  }
-  static const char normal[] = "1234567890";
-  static const char shifted[] = "!@#$%^&*()";
-  if (u >= 0x1E && u <= 0x27) return shift ? shifted[u - 0x1E] : normal[u - 0x1E];
-  switch (u) {
-    case 0x2C: return ' ';
-    case 0x2D: return shift ? '_' : '-';
-    case 0x2E: return shift ? '+' : '=';
-    case 0x2F: return shift ? '{' : '[';
-    case 0x30: return shift ? '}' : ']';
-    case 0x31: return shift ? '|' : '\\';
-    case 0x33: return shift ? ':' : ';';
-    case 0x34: return shift ? '"' : '\'';
-    case 0x35: return shift ? '~' : '`';
-    case 0x36: return shift ? '<' : ',';
-    case 0x37: return shift ? '>' : '.';
-    case 0x38: return shift ? '?' : '/';
-    default: return 0;
   }
 }
 
