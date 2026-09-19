@@ -7,6 +7,7 @@ struct InputEvent {
   InputKey key;
   char character;
 
+  InputEvent() : key(InputKey::Character), character(0) {}
   InputEvent(InputKey keyValue, char characterValue = 0)
       : key(keyValue), character(characterValue) {}
 };
