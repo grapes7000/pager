@@ -65,7 +65,7 @@ void BleKeyboardHost::begin(){
       instance_->targetAddress_=result.address;
       Serial.printf("[BT] keyboard matched: %s name=%s\n",
                     result.address.c_str(),result.name.c_str());
-      instance_->bluetooth_.inquiry().cancel();
+      // This EspBle inquiry API has no cancel(); let the short inquiry finish.\n      // onComplete() will connect to the matched keyboard.
     }
   });
 
