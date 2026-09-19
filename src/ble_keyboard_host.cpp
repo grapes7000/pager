@@ -125,7 +125,17 @@ void BleKeyboardHost::begin() {
 
   initialized_ = true;
   Serial.println("[BT] Classic HID host ready");
-  startInquiry();
+
+  // Known 518BT keyboard. Connect directly instead of relying on Classic inquiry.
+  targetAddress_ = "E8:74:76:2D:CF:DB";
+  connecting_ = true;
+  Serial.printf("[BT] connecting directly to keyboard %s...\\n", targetAddress_.c_str());
+  if (!hid.connect(targetAddress_.c_str())) {
+    Serial.printf("[BT] direct connect request rejected: %s\\n",
+                  bluetooth_.lastErrorDetail().c_str());
+    connecting_ = false;
+    nextScanMs_ = millis() + 2500;
+  }
 }
 
 void BleKeyboardHost::startInquiry() {
@@ -150,7 +160,16 @@ void BleKeyboardHost::update() {
 
   if (initialized_ && !connected_ && !scanning_ && !connecting_ &&
       static_cast<int32_t>(millis() - nextScanMs_) >= 0) {
-    startInquiry();
+    if (targetAddress_.isEmpty()) targetAddress_ = "E8:74:76:2D:CF:DB";
+    connecting_ = true;
+    Serial.printf("[BT] retrying direct keyboard connection to %s...\\n",
+                  targetAddress_.c_str());
+    if (!bluetooth_.hidHost().connect(targetAddress_.c_str())) {
+      Serial.printf("[BT] direct reconnect request rejected: %s\\n",
+                    bluetooth_.lastErrorDetail().c_str());
+      connecting_ = false;
+      nextScanMs_ = millis() + 3000;
+    }
   }
 }
 
