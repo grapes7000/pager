@@ -60,7 +60,7 @@ void setup(){
   view.begin(messages);
   view.render(messages);
   Serial.println("OK PAGER/0.3");
-  Serial.println("Starting Bluetooth Classic HID keyboard discovery...");
+  Serial.println("Starting BLE HID keyboard discovery...");
   keyboard.begin();
 }
 
