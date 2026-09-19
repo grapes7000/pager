@@ -150,9 +150,9 @@ void BleKeyboardHost::handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_
     if (targetFound_ && !connected_ && !connecting_) {
       connecting_ = true;
       Serial.println("[BT] opening Classic HID keyboard...");
-      esp_err_t err = esp_hidh_dev_open(targetBda_, ESP_HID_TRANSPORT_BT, 0);
-      if (err != ESP_OK) {
-        Serial.printf("[BT] HID open start failed: %s\n", esp_err_to_name(err));
+      esp_hidh_dev_t* dev = esp_hidh_dev_open(targetBda_, ESP_HID_TRANSPORT_BT, 0);
+      if (!dev) {
+        Serial.println("[BT] HID open start failed");
         connecting_ = false;
         targetFound_ = false;
         nextScanMs_ = millis() + 2500;
