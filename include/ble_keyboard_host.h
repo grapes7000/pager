@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include <esp_gap_bt_api.h>
-#include <esp_hidh.h>
+#include <esp_hidh_api.h>
 
 #include "keyboard_input.h"
 
@@ -33,13 +33,13 @@ class BleKeyboardHost : public KeyboardInput {
 
   void startInquiry();
   void handleGapEvent(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param);
-  void handleHidEvent(esp_hidh_event_t event, esp_hidh_event_data_t* param);
+  void handleHidEvent(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param);
   void handleReport(const uint8_t* data, size_t length, uint16_t reportId);
   void push(InputEvent event);
 
   static bool looksLikeKeyboard(const String& name);
   static char usageToAscii(uint8_t usage, bool shift);
   static void gapCallback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t* param);
-  static void hidCallback(void* arg, esp_event_base_t base, int32_t eventId, void* eventData);
+  static void hidCallback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t* param);
   static BleKeyboardHost* instance_;
 };
