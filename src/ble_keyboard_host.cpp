@@ -9,9 +9,16 @@ class PagerAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
   explicit PagerAdvertisedCallbacks(BleKeyboardHost* host):host_(host){}
   void onResult(BLEAdvertisedDevice device) override {
     if(device.haveServiceUUID() && device.isAdvertisingService(HID_SERVICE)){
-      Serial.printf("[BT] HID found: %s name=%s\\n", device.getAddress().toString().c_str(), device.haveName()?device.getName().c_str():"(unknown)");
-      BLEDevice::getScan()->stop();
-      host_->setTarget(device.getAddress());
+      const String name=device.haveName()?device.getName().c_str():"(unknown)";
+      Serial.printf("[BT] HID seen: %s name=%s\n",device.getAddress().toString().c_str(),name.c_str());
+
+      // Do not grab the first HID peripheral we see. The keyboard we want
+      // advertises itself to phones as "Bluetooth Keyboard".
+      if(name.equalsIgnoreCase("Bluetooth Keyboard")){
+        Serial.println("[BT] target keyboard matched");
+        BLEDevice::getScan()->stop();
+        host_->setTarget(device.getAddress());
+      }
     }
   }
  private:
