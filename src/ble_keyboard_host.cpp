@@ -1,182 +1,62 @@
 #include "ble_keyboard_host.h"
-
-BleKeyboardHost* BleKeyboardHost::instance_ = nullptr;
-
-bool BleKeyboardHost::looksLikeKeyboard(const String& name) {
-  String lower = name;
-  lower.toLowerCase();
-  return lower.indexOf("keyboard") >= 0 || lower.indexOf("518") >= 0;
+namespace {
+constexpr char kKeyboardAddress[]="e8:74:76:2d:cf:db";
+const NimBLEUUID kHidService((uint16_t)0x1812);
+class ScanCallbacks:public NimBLEScanCallbacks{
+ public:
+ void onResult(const NimBLEAdvertisedDevice* d) override{
+  auto* h=BleKeyboardHost::instance_; if(!h)return;
+  Serial.printf("[BLE] seen: %s",d->getAddress().toString().c_str());
+  if(d->haveName())Serial.printf(" name=%s",d->getName().c_str()); Serial.println();
+  bool addr=d->getAddress().toString()==std::string(kKeyboardAddress);
+  bool hid=d->isAdvertisingService(kHidService);
+  if(addr||hid){h->setTarget(d);Serial.printf("[BLE] keyboard found: %s%s\n",d->getAddress().toString().c_str(),hid?" HID=1812":"");NimBLEDevice::getScan()->stop();}
+ }
+ void onScanEnd(const NimBLEScanResults&,int reason) override{if(BleKeyboardHost::instance_)BleKeyboardHost::instance_->scanEnded(reason);}
+}; ScanCallbacks scanCallbacks;
 }
-
-InputKey BleKeyboardHost::usageToKey(uint8_t usage, uint8_t ascii) {
-  if (usage == 0x28) return InputKey::Enter;
-  if (usage == 0x29) return InputKey::Escape;
-  if (usage == 0x2A) return InputKey::Backspace;
-  return InputKey::Character;
+BleKeyboardHost* BleKeyboardHost::instance_=nullptr;
+void BleKeyboardHost::setTarget(const NimBLEAdvertisedDevice* d){delete target_;target_=new NimBLEAdvertisedDevice(*d);shouldConnect_=true;}
+void BleKeyboardHost::scanEnded(int reason){scanning_=false;if(!shouldConnect_){Serial.printf("[BLE] scan ended (%d); keyboard not found\n",reason);nextScanMs_=millis()+1500;}}
+InputKey BleKeyboardHost::usageToKey(uint8_t u){if(u==0x28)return InputKey::Enter;if(u==0x29)return InputKey::Escape;if(u==0x2A)return InputKey::Backspace;return InputKey::Character;}
+char BleKeyboardHost::usageToAscii(uint8_t u,uint8_t m){
+ bool s=m&0x22;
+ if(u>=0x04&&u<=0x1d){char c='a'+u-0x04;return s?c-32:c;}
+ if(u>=0x1e&&u<=0x27){static const char a[]="1234567890",b[]="!@#$%^&*()";return s?b[u-0x1e]:a[u-0x1e];}
+ switch(u){case 0x2c:return ' ';case 0x2d:return s?'_':'-';case 0x2e:return s?'+':'=';case 0x2f:return s?'{':'[';case 0x30:return s?'}':']';case 0x31:return s?'|':'\\';case 0x33:return s?':':';';case 0x34:return s?'"':39;case 0x35:return s?'~':96;case 0x36:return s?'<':',';case 0x37:return s?'>':'.';case 0x38:return s?'?':'/';default:return 0;}
 }
-
-void BleKeyboardHost::begin() {
-  instance_ = this;
-  Serial.println("[BT] starting EspBle Bluetooth Classic HID host...");
-
-  auto& hid = bluetooth_.hidHost();
-  hid.setKeyboardLayout(EspBleKeyboardLayout::EnUs);
-
-  hid.onKeyboard([](const EspBleClassicHidKeyboardEvent& event) {
-    if (!instance_ || !event.pressed) return;
-
-    Serial.printf("[BT] key usage=0x%02x ascii=0x%02x\n",
-                  event.usage, event.ascii);
-
-    InputKey key = usageToKey(event.usage, event.ascii);
-    if (key == InputKey::Character) {
-      if (event.ascii) instance_->push(InputEvent(key, static_cast<char>(event.ascii)));
-    } else {
-      instance_->push(InputEvent(key));
-    }
-  });
-
-  hid.onInputReport([](const EspBleClassicHidReport& report) {
-    Serial.printf("[BT] raw HID report id=%u len=%u\n",
-                  report.reportId,
-                  static_cast<unsigned>(report.value.length()));
-  });
-
-  hid.onConnected([](const EspBleClassicHidConnection& connection) {
-    if (!instance_) return;
-    instance_->connected_ = true;
-    instance_->connecting_ = false;
-    instance_->scanning_ = false;
-    Serial.printf("[BT] keyboard connected: %s\n", connection.peerAddress.c_str());
-  });
-
-  hid.onConnectionFailed([](const EspBleClassicHidConnectionFailure& failure) {
-    if (!instance_) return;
-    instance_->connected_ = false;
-    instance_->connecting_ = false;
-    instance_->targetAddress_ = "";
-    instance_->nextScanMs_ = millis() + 2500;
-    Serial.printf("[BT] keyboard connection failed: %s\n", failure.detail.c_str());
-  });
-
-  hid.onDisconnected([](const EspBleClassicHidConnection& connection) {
-    if (!instance_) return;
-    instance_->connected_ = false;
-    instance_->connecting_ = false;
-    instance_->targetAddress_ = "";
-    instance_->nextScanMs_ = millis() + 2500;
-    Serial.printf("[BT] keyboard disconnected: %s\n", connection.peerAddress.c_str());
-  });
-
-  bluetooth_.inquiry().onResult([](const EspBleClassicInquiryResult& result) {
-    if (!instance_) return;
-
-    Serial.printf("[BT] Classic seen: %s", result.address.c_str());
-    if (!result.name.isEmpty()) Serial.printf(" name=%s", result.name.c_str());
-    if (result.hasRssi) Serial.printf(" rssi=%d", result.rssi);
-    Serial.println();
-
-    const String address(result.address.c_str());
-    if (address.equalsIgnoreCase("E8:74:76:2D:CF:DB")) {
-      instance_->targetAddress_ = address;
-      Serial.printf("[BT] known keyboard found: %s name=%s\n",
-                    result.address.c_str(), result.name.c_str());
-      instance_->bluetooth_.inquiry().stop();
-    }
-  });
-
-  bluetooth_.inquiry().onComplete([](const EspBleClassicInquiryComplete&) {
-    if (!instance_) return;
-    instance_->scanning_ = false;
-
-    if (!instance_->targetAddress_.isEmpty() &&
-        !instance_->connected_ && !instance_->connecting_) {
-      instance_->connecting_ = true;
-      Serial.printf("[BT] connecting HID host to %s...\n",
-                    instance_->targetAddress_.c_str());
-      if (!instance_->bluetooth_.hidHost().connect(instance_->targetAddress_.c_str())) {
-        Serial.printf("[BT] connect request rejected: %s\n",
-                      instance_->bluetooth_.lastErrorDetail().c_str());
-        instance_->connecting_ = false;
-        instance_->targetAddress_ = "";
-        instance_->nextScanMs_ = millis() + 2500;
-      }
-    } else if (!instance_->connected_) {
-      Serial.println("[BT] no matching keyboard found; will rescan");
-      instance_->nextScanMs_ = millis() + 2000;
-    }
-  });
-
-  EspBleClassicConfig config;
-  config.deviceName = "Pager Keyboard Host";
-  if (!bluetooth_.begin(config)) {
-    Serial.printf("[BT] Classic init failed: %s: %s\n",
-                  bluetooth_.lastErrorName(),
-                  bluetooth_.lastErrorDetail().c_str());
-    return;
-  }
-
-  if (!hid.begin()) {
-    Serial.printf("[BT] HID host init failed: %s: %s\n",
-                  bluetooth_.lastErrorName(),
-                  bluetooth_.lastErrorDetail().c_str());
-    return;
-  }
-
-  initialized_ = true;
-  Serial.println("[BT] Classic HID host ready");
-
-  // Discover the known keyboard first so inquiry/SDP metadata is available
-  // before opening the Classic HID connection.
-  targetAddress_ = "";
-  startInquiry();
+void BleKeyboardHost::begin(){
+ instance_=this;Serial.println("[BLE] starting BLE HID keyboard client...");
+ NimBLEDevice::init("Pager Keyboard Host");
+ NimBLEDevice::setSecurityAuth(true,true,true);NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+ auto* s=NimBLEDevice::getScan();s->setScanCallbacks(&scanCallbacks,false);s->setActiveScan(true);s->setInterval(45);s->setWindow(30);
+ initialized_=true;startScan();
 }
-
-void BleKeyboardHost::startInquiry() {
-  if (!initialized_ || scanning_ || connecting_ || connected_) return;
-
-  targetAddress_ = "";
-  EspBleClassicInquiryConfig config;
-  config.durationSeconds = 8;
-
-  Serial.println("[BT] scanning Bluetooth Classic devices...");
-  if (bluetooth_.inquiry().start(config)) {
-    scanning_ = true;
-  } else {
-    Serial.printf("[BT] inquiry start failed: %s\n",
-                  bluetooth_.lastErrorDetail().c_str());
-    nextScanMs_ = millis() + 3000;
-  }
+void BleKeyboardHost::startScan(){
+ if(!initialized_||scanning_||connecting_||connected_)return;
+ Serial.println("[BLE] scanning for HID service 1812 / known keyboard...");scanning_=true;shouldConnect_=false;
+ if(!NimBLEDevice::getScan()->start(8000,false,true)){scanning_=false;Serial.println("[BLE] scan failed to start");nextScanMs_=millis()+2000;}
 }
-
-void BleKeyboardHost::update() {
-  bluetooth_.update();
-
-  if (initialized_ && !connected_ && !scanning_ && !connecting_ &&
-      static_cast<int32_t>(millis() - nextScanMs_) >= 0) {
-    if (targetAddress_.isEmpty()) targetAddress_ = "E8:74:76:2D:CF:DB";
-    connecting_ = true;
-    Serial.printf("[BT] retrying direct keyboard connection to %s...\n",
-                  targetAddress_.c_str());
-    if (!bluetooth_.hidHost().connect(targetAddress_.c_str())) {
-      Serial.printf("[BT] direct reconnect request rejected: %s\n",
-                    bluetooth_.lastErrorDetail().c_str());
-      connecting_ = false;
-      nextScanMs_ = millis() + 3000;
-    }
-  }
+bool BleKeyboardHost::connectTarget(){
+ if(!target_)return false;connecting_=true;shouldConnect_=false;if(!client_)client_=NimBLEDevice::createClient();
+ Serial.printf("[BLE] connecting to %s...\n",target_->getAddress().toString().c_str());
+ if(!client_->connect(target_)){Serial.println("[BLE] connection failed");connecting_=false;nextScanMs_=millis()+2000;return false;}
+ connected_=true;connecting_=false;Serial.println("[BLE] connected; discovering HID service...");subscribeHidReports();return true;
 }
-
-void BleKeyboardHost::push(InputEvent event) {
-  uint8_t next = (head_ + 1) % kQueueSize;
-  if (next == tail_) return;
-  queue_[head_] = event;
-  head_ = next;
+void BleKeyboardHost::subscribeHidReports(){
+ auto* hid=client_->getService(kHidService);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found");return;}
+ size_t n=0;for(auto* c:hid->getCharacteristics(true)){if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());}}
+ Serial.printf("[BLE] HID subscriptions: %u\n",(unsigned)n);
 }
-
-bool BleKeyboardHost::pop(InputEvent& event) {
-  if (tail_ == head_) return false;
-  event = queue_[tail_];
-  tail_ = (tail_ + 1) % kQueueSize;
-  return true;
+void BleKeyboardHost::notifyCallback(NimBLERemoteCharacteristic*,uint8_t* d,size_t n,bool){if(instance_)instance_->handleKeyboardReport(d,n);}
+void BleKeyboardHost::handleKeyboardReport(const uint8_t* d,size_t n){
+ Serial.printf("[BLE] HID report len=%u:",(unsigned)n);for(size_t i=0;i<n;++i)Serial.printf(" %02x",d[i]);Serial.println();
+ if(n<8)return;uint8_t m=d[0];for(size_t i=2;i<8;++i){uint8_t u=d[i];if(!u)continue;InputKey k=usageToKey(u);if(k==InputKey::Character){char a=usageToAscii(u,m);if(a)push(InputEvent(k,a));}else push(InputEvent(k));}
 }
+void BleKeyboardHost::update(){
+ if(!initialized_)return;if(connected_&&client_&&!client_->isConnected()){connected_=false;Serial.println("[BLE] keyboard disconnected");nextScanMs_=millis()+1000;}
+ if(shouldConnect_&&!connecting_&&!connected_)connectTarget();
+ if(!connected_&&!connecting_&&!scanning_&&(int32_t)(millis()-nextScanMs_)>=0)startScan();
+}
+void BleKeyboardHost::push(InputEvent e){uint8_t n=(head_+1)%kQueueSize;if(n==tail_)return;queue_[head_]=e;head_=n;}
+bool BleKeyboardHost::pop(InputEvent& e){if(tail_==head_)return false;e=queue_[tail_];tail_=(tail_+1)%kQueueSize;return true;}
