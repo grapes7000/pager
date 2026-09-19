@@ -31,9 +31,13 @@ void BleKeyboardHost::begin() {
   Serial.printf("[BT] after btStart: started=%d controller=%d\n",
                 (int)btStarted(), (int)esp_bt_controller_get_status());
   esp_err_t err;
+  Serial.println("[BT] checking Bluedroid status...");
   esp_bluedroid_status_t bluedroid = esp_bluedroid_get_status();
+  Serial.printf("[BT] Bluedroid status=%d\n", (int)bluedroid);
   if (bluedroid == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
+    Serial.println("[BT] calling esp_bluedroid_init...");
     err = esp_bluedroid_init();
+    Serial.printf("[BT] esp_bluedroid_init returned: %s\n", esp_err_to_name(err));
     if (err != ESP_OK) {
       Serial.printf("[BT] Bluedroid init failed: %s\n", esp_err_to_name(err));
       return;
