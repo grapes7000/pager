@@ -7,33 +7,46 @@
 #include "message_store.h"
 #include "message_view.h"
 #include "composer.h"
+#include "ble_keyboard_host.h"
 
 Adafruit_SH1106G display(PagerConfig::OLED_WIDTH,PagerConfig::OLED_HEIGHT,&Wire,-1);
 Encoder encoder;
 MessageStore messages;
 MessageView view(display);
 Composer composer(display);
+BleKeyboardHost keyboard;
 uint32_t nextMessageId=100;
 
 void seed(){messages.add({1,"Lakota","where are u?",0,true,true});messages.add({2,"Brooke","building the tiny pager rn",0,false,false});messages.add({3,"Lakota","this message is long enough to preview",0,true,true});messages.add({4,"Brooke","encoder scrolling eats",0,false,false});messages.add({5,"Lakota","okay text me when it works",0,true,true});}
 
-void handleTextInput(){
+void sendComposed(){
+  String body;
+  if(composer.submit(body)){
+    messages.add({nextMessageId++,"Brooke",body,millis(),false,false});
+    view.begin(messages);
+    Serial.printf("SEND %s\n",body.c_str());
+  }
+}
+
+void handleKeyboardInput(){
+  InputEvent event;
+  while(keyboard.pop(event)){
+    switch(event.key){
+      case InputKey::Character: composer.append(event.character); break;
+      case InputKey::Backspace: composer.backspace(); break;
+      case InputKey::Enter: sendComposed(); break;
+      case InputKey::Escape: composer.cancel(); break;
+    }
+  }
+}
+
+void handleSerialFallback(){
   while(Serial.available()){
     char c=(char)Serial.read();
-    if(c=='\r' || c=='\n'){
-      String body;
-      if(composer.submit(body)){
-        messages.add({nextMessageId++,"Brooke",body,millis(),false,false});
-        view.begin(messages);
-        Serial.printf("SEND %s\n",body.c_str());
-      }
-    }else if(c==8 || c==127){
-      composer.backspace();
-    }else if(c==27){
-      composer.cancel();
-    }else{
-      composer.append(c);
-    }
+    if(c=='\r'||c=='\n')sendComposed();
+    else if(c==8||c==127)composer.backspace();
+    else if(c==27)composer.cancel();
+    else composer.append(c);
   }
 }
 
@@ -46,17 +59,24 @@ void setup(){
   seed();
   view.begin(messages);
   view.render(messages);
-  Serial.println("OK PAGER/0.2");
-  Serial.println("Encoder click = compose; serial typing is temporary keyboard input.");
+  Serial.println("OK PAGER/0.3");
+  Serial.println("Starting BLE HID keyboard discovery...");
+  keyboard.begin();
 }
 
 void loop(){
   encoder.update();
+  keyboard.update();
+
   if(composer.active()){
-    handleTextInput();
+    handleKeyboardInput();
+    handleSerialFallback();
     if(encoder.consumeClick())composer.cancel();
-    composer.render();
+    if(composer.active())composer.render();
+    else view.render(messages);
   }else{
+    InputEvent ignored;
+    while(keyboard.pop(ignored)){}
     int d=encoder.consumeDelta();
     if(d)view.moveSelection(d,messages);
     if(encoder.consumeClick())composer.begin();
