@@ -5,7 +5,10 @@ enum class InputKey : uint8_t { Character, Backspace, Enter, Escape };
 
 struct InputEvent {
   InputKey key;
-  char character = 0;
+  char character;
+
+  InputEvent(InputKey keyValue, char characterValue = 0)
+      : key(keyValue), character(characterValue) {}
 };
 
 class KeyboardInput {
