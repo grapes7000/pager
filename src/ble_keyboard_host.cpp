@@ -8,7 +8,8 @@ class PagerAdvertisedCallbacks : public BLEAdvertisedDeviceCallbacks {
  public:
   explicit PagerAdvertisedCallbacks(BleKeyboardHost* host):host_(host){}
   void onResult(BLEAdvertisedDevice device) override {
-    if(device.haveServiceUUID() && device.isAdvertisingService(HID_SERVICE)){\n      Serial.printf("[BT] HID found: %s name=%s\\n", device.getAddress().toString().c_str(), device.haveName()?device.getName().c_str():"(unknown)");
+    if(device.haveServiceUUID() && device.isAdvertisingService(HID_SERVICE)){
+      Serial.printf("[BT] HID found: %s name=%s\\n", device.getAddress().toString().c_str(), device.haveName()?device.getName().c_str():"(unknown)");
       BLEDevice::getScan()->stop();
       host_->setTarget(device.getAddress());
     }
@@ -56,17 +57,23 @@ void BleKeyboardHost::markDisconnected(){
 }
 
 bool BleKeyboardHost::connectTarget(){
-  if(!target_){Serial.println("[BT] FAIL no target");return false;}\n  Serial.printf("[BT] connecting %s\\n",target_->toString().c_str());
+  if(!target_){Serial.println("[BT] FAIL no target");return false;}
+  Serial.printf("[BT] connecting %s\\n",target_->toString().c_str());
   if(!client_){
     client_=BLEDevice::createClient();
     client_->setClientCallbacks(new PagerClientCallbacks(this));
   }
-  if(!client_->connect(*target_)){Serial.println("[BT] FAIL connect");return false;}\n  Serial.println("[BT] link connected");
+  if(!client_->connect(*target_)){Serial.println("[BT] FAIL connect");return false;}
+  Serial.println("[BT] link connected");
   BLERemoteService* hid=client_->getService(HID_SERVICE);
-  if(!hid){Serial.println("[BT] FAIL HID service");client_->disconnect();return false;}\n  Serial.println("[BT] HID service found");
+  if(!hid){Serial.println("[BT] FAIL HID service");client_->disconnect();return false;}
+  Serial.println("[BT] HID service found");
   BLERemoteCharacteristic* input=hid->getCharacteristic(BOOT_KEYBOARD_INPUT);
-  if(!input){Serial.println("[BT] FAIL boot input 0x2A22 missing");client_->disconnect();return false;}\n  Serial.printf("[BT] boot input found notify=%s\\n",input->canNotify()?"yes":"no");\n  if(!input->canNotify()){Serial.println("[BT] FAIL boot input cannot notify");client_->disconnect();return false;}
-  input->registerForNotify(notify);\n  Serial.println("[BT] notifications registered");
+  if(!input){Serial.println("[BT] FAIL boot input 0x2A22 missing");client_->disconnect();return false;}
+  Serial.printf("[BT] boot input found notify=%s\\n",input->canNotify()?"yes":"no");
+  if(!input->canNotify()){Serial.println("[BT] FAIL boot input cannot notify");client_->disconnect();return false;}
+  input->registerForNotify(notify);
+  Serial.println("[BT] notifications registered");
   connected_=true;
   memset(previous_,0,sizeof(previous_));
   Serial.printf("BT keyboard connected: %s\n",target_->toString().c_str());
