@@ -59,7 +59,9 @@ void BleKeyboardHost::begin() {
     return;
   }
 
+  Serial.println("[BT] registering GAP callback...");
   err = esp_bt_gap_register_callback(gapCallback);
+  Serial.printf("[BT] GAP callback register returned: %s\n", esp_err_to_name(err));
   if (err != ESP_OK) {
     Serial.printf("[BT] GAP callback failed: %s\n", esp_err_to_name(err));
     return;
@@ -69,7 +71,9 @@ void BleKeyboardHost::begin() {
   hidCfg.callback = hidCallback;
   hidCfg.event_stack_size = 4096;
   hidCfg.callback_arg = this;
+  Serial.println("[BT] calling esp_hidh_init...");
   err = esp_hidh_init(&hidCfg);
+  Serial.printf("[BT] esp_hidh_init returned: %s\n", esp_err_to_name(err));
   if (err != ESP_OK) {
     Serial.printf("[BT] HID host init failed: %s\n", esp_err_to_name(err));
     return;
