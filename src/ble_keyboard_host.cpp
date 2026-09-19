@@ -4,6 +4,7 @@
 #include <esp_bt.h>
 #include <esp_bt_device.h>
 #include <esp_bt_main.h>
+#include <esp32-hal-bt.h>
 #include <nvs_flash.h>
 
 BleKeyboardHost* BleKeyboardHost::instance_ = nullptr;
@@ -17,40 +18,15 @@ bool BleKeyboardHost::looksLikeKeyboard(const String& name) {
 void BleKeyboardHost::begin() {
   instance_ = this;
 
-  esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    err = nvs_flash_init();
-  }
-  if (err != ESP_OK) {
-    Serial.printf("[BT] NVS init failed: %s\n", esp_err_to_name(err));
+  // Let Arduino's own BT HAL bring up the controller. Arduino's ESP32 core
+  // owns the controller lifecycle, so calling esp_bt_controller_init() here
+  // directly can return INVALID_STATE even immediately after boot.
+  if (!btStarted() && !btStart()) {
+    Serial.println("[BT] Arduino Bluetooth controller start failed");
     return;
   }
 
-  // Arduino may leave individual Bluetooth layers in different states. Bring
-  // each layer up only when it actually needs initialization/enabling.
-  esp_bt_controller_status_t controller = esp_bt_controller_get_status();
-  if (controller == ESP_BT_CONTROLLER_STATUS_IDLE) {
-    esp_bt_controller_config_t btCfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    err = esp_bt_controller_init(&btCfg);
-    if (err != ESP_OK) {
-      Serial.printf("[BT] controller init failed: %s\n", esp_err_to_name(err));
-      return;
-    }
-    controller = esp_bt_controller_get_status();
-  }
-
-  if (controller == ESP_BT_CONTROLLER_STATUS_INITED) {
-    err = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
-    if (err != ESP_OK) {
-      Serial.printf("[BT] controller enable failed: %s\n", esp_err_to_name(err));
-      return;
-    }
-  } else if (controller != ESP_BT_CONTROLLER_STATUS_ENABLED) {
-    Serial.printf("[BT] unexpected controller state: %d\n", (int)controller);
-    return;
-  }
-
+  esp_err_t err;
   esp_bluedroid_status_t bluedroid = esp_bluedroid_get_status();
   if (bluedroid == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
     err = esp_bluedroid_init();
