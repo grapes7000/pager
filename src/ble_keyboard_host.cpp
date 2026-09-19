@@ -21,11 +21,15 @@ void BleKeyboardHost::begin() {
   // Let Arduino's own BT HAL bring up the controller. Arduino's ESP32 core
   // owns the controller lifecycle, so calling esp_bt_controller_init() here
   // directly can return INVALID_STATE even immediately after boot.
-  Serial.printf("[BT] before btStart: started=%d controller=%d\\n",\n                (int)btStarted(), (int)esp_bt_controller_get_status());\n  if (!btStarted() && !btStart()) {
+  Serial.printf("[BT] before btStart: started=%d controller=%d\n",
+                (int)btStarted(), (int)esp_bt_controller_get_status());
+  if (!btStarted() && !btStart()) {
     Serial.println("[BT] Arduino Bluetooth controller start failed");
     return;
   }
-\n  Serial.printf("[BT] after btStart: started=%d controller=%d\\n",\n                (int)btStarted(), (int)esp_bt_controller_get_status());
+
+  Serial.printf("[BT] after btStart: started=%d controller=%d\n",
+                (int)btStarted(), (int)esp_bt_controller_get_status());
   esp_err_t err;
   esp_bluedroid_status_t bluedroid = esp_bluedroid_get_status();
   if (bluedroid == ESP_BLUEDROID_STATUS_UNINITIALIZED) {
