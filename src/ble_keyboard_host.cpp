@@ -72,7 +72,7 @@ void BleKeyboardHost::begin() {
       instance_->targetAddress_ = result.address.c_str();
       Serial.printf("[BT] keyboard matched: %s name=%s\n",
                     result.address.c_str(), result.name.c_str());
-      bluetooth_.inquiry().stop();
+      instance_->bluetooth_.inquiry().stop();
     }
   });
 
