@@ -76,10 +76,10 @@ void BleKeyboardHost::begin() {
     if (result.hasRssi) Serial.printf(" rssi=%d", result.rssi);
     Serial.println();
 
-    String name(result.name.c_str());
-    if (instance_->targetAddress_.isEmpty() && looksLikeKeyboard(name)) {
-      instance_->targetAddress_ = result.address.c_str();
-      Serial.printf("[BT] keyboard matched: %s name=%s\n",
+    const String address(result.address.c_str());
+    if (address.equalsIgnoreCase("E8:74:76:2D:CF:DB")) {
+      instance_->targetAddress_ = address;
+      Serial.printf("[BT] known keyboard found: %s name=%s\n",
                     result.address.c_str(), result.name.c_str());
       instance_->bluetooth_.inquiry().stop();
     }
@@ -126,16 +126,10 @@ void BleKeyboardHost::begin() {
   initialized_ = true;
   Serial.println("[BT] Classic HID host ready");
 
-  // Known 518BT keyboard. Connect directly instead of relying on Classic inquiry.
-  targetAddress_ = "E8:74:76:2D:CF:DB";
-  connecting_ = true;
-  Serial.printf("[BT] connecting directly to keyboard %s...\\n", targetAddress_.c_str());
-  if (!hid.connect(targetAddress_.c_str())) {
-    Serial.printf("[BT] direct connect request rejected: %s\\n",
-                  bluetooth_.lastErrorDetail().c_str());
-    connecting_ = false;
-    nextScanMs_ = millis() + 2500;
-  }
+  // Discover the known keyboard first so inquiry/SDP metadata is available
+  // before opening the Classic HID connection.
+  targetAddress_ = "";
+  startInquiry();
 }
 
 void BleKeyboardHost::startInquiry() {
@@ -162,10 +156,10 @@ void BleKeyboardHost::update() {
       static_cast<int32_t>(millis() - nextScanMs_) >= 0) {
     if (targetAddress_.isEmpty()) targetAddress_ = "E8:74:76:2D:CF:DB";
     connecting_ = true;
-    Serial.printf("[BT] retrying direct keyboard connection to %s...\\n",
+    Serial.printf("[BT] retrying direct keyboard connection to %s...\n",
                   targetAddress_.c_str());
     if (!bluetooth_.hidHost().connect(targetAddress_.c_str())) {
-      Serial.printf("[BT] direct reconnect request rejected: %s\\n",
+      Serial.printf("[BT] direct reconnect request rejected: %s\n",
                     bluetooth_.lastErrorDetail().c_str());
       connecting_ = false;
       nextScanMs_ = millis() + 3000;
