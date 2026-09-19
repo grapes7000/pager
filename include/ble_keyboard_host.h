@@ -9,6 +9,8 @@ class BleKeyboardHost : public KeyboardInput {
   void update() override;
   bool connected() const override { return connected_; }
   bool pop(InputEvent& event) override;
+  void setTarget(const BLEAddress& address);
+  void markDisconnected();
 
  private:
   static constexpr size_t kQueueSize = 32;
