@@ -10,7 +10,7 @@ class ScanCallbacks:public NimBLEScanCallbacks{
   if(d->haveName())Serial.printf(" name=%s",d->getName().c_str()); Serial.println();
   bool addr=d->getAddress().toString()==std::string(kKeyboardAddress);
   bool hid=d->isAdvertisingService(kHidService);
-  if(addr||hid){h->setTarget(d);Serial.printf("[BLE] keyboard found: %s%s\n",d->getAddress().toString().c_str(),hid?" HID=1812":"");NimBLEDevice::getScan()->stop();}
+  if(addr){h->setTarget(d);Serial.printf("[BLE] keyboard found: %s%s\n",d->getAddress().toString().c_str(),hid?" HID=1812":"");NimBLEDevice::getScan()->stop();}
  }
  void onScanEnd(const NimBLEScanResults&,int reason) override{if(BleKeyboardHost::instance_)BleKeyboardHost::instance_->scanEnded(reason);}
 }; ScanCallbacks scanCallbacks;
