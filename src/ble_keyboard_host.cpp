@@ -5,6 +5,7 @@
 #include <esp_bt_device.h>
 #include <esp_bt_main.h>
 #include <esp32-hal-bt.h>
+#include <esp32-hal-alloc-bt-classic-mem.h>
 #include <nvs_flash.h>
 
 BleKeyboardHost* BleKeyboardHost::instance_ = nullptr;
