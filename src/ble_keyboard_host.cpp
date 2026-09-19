@@ -59,6 +59,15 @@ void BleKeyboardHost::begin() {
     Serial.printf("[BT] keyboard connection failed: %s\n", failure.detail.c_str());
   });
 
+  hid.onDisconnected([](const EspBleClassicHidConnection& connection) {
+    if (!instance_) return;
+    instance_->connected_ = false;
+    instance_->connecting_ = false;
+    instance_->targetAddress_ = "";
+    instance_->nextScanMs_ = millis() + 2500;
+    Serial.printf("[BT] keyboard disconnected: %s\n", connection.peerAddress.c_str());
+  });
+
   bluetooth_.inquiry().onResult([](const EspBleClassicInquiryResult& result) {
     if (!instance_) return;
 

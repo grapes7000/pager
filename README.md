@@ -35,3 +35,24 @@ pio run
 pio run -t upload
 pio device monitor -b 115200
 ```
+
+The configured flash layout is 2 MB and uses `partitions.csv` (one application
+slot, no OTA update slot). EspBle's pinned revision ships a precompiled Classic
+Bluetooth host archive; the explicit linker flags in `platformio.ini` are needed
+for PlatformIO to link it. This Arduino build does not use `sdkconfig.defaults`.
+
+Press the encoder button to compose, then type using the Classic Bluetooth
+keyboard or serial monitor. Enter adds the message to the local inbox and logs
+it over serial; wireless message delivery is not implemented. Escape or another
+encoder press cancels. Keyboard discovery currently matches names containing
+`keyboard` or `518`.
+
+Run the host regression checks (requires Bash and g++) with:
+
+```bash
+bash tests/run_host_tests.sh
+```
+
+These check composer boundaries, message capacity, selection/read timing, and
+button debounce using simulated time, pins, and display calls. Bluetooth pairing,
+reconnection, and physical encoder/display behavior still require board testing.

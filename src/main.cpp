@@ -67,20 +67,25 @@ void setup(){
 void loop(){
   encoder.update();
   keyboard.update();
+  // Rotation while composing must not scroll the inbox after returning to it.
+  int d=encoder.consumeDelta();
 
   if(composer.active()){
     handleKeyboardInput();
     handleSerialFallback();
     if(encoder.consumeClick())composer.cancel();
     if(composer.active())composer.render();
-    else view.render(messages);
+    else {
+      view.resetDwell();
+      view.render(messages);
+    }
   }else{
     InputEvent ignored;
     while(keyboard.pop(ignored)){}
-    int d=encoder.consumeDelta();
+    while(Serial.available())Serial.read();
     if(d)view.moveSelection(d,messages);
     if(encoder.consumeClick())composer.begin();
-    view.updateReadState(messages);
+    if(!composer.active())view.updateReadState(messages);
     if(composer.active())composer.render(); else view.render(messages);
   }
   delay(10);
