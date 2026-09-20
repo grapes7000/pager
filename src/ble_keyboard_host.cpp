@@ -31,7 +31,7 @@ class ScanCallbacks:public NimBLEScanCallbacks{
 }
 BleKeyboardHost* BleKeyboardHost::instance_=nullptr;
 void BleKeyboardHost::setTarget(const NimBLEAdvertisedDevice* d){delete target_;target_=new NimBLEAdvertisedDevice(*d);shouldConnect_=true;}
-void BleKeyboardHost::scanEnded(int reason){scanning_=false;if(!shouldConnect_){Serial.printf("[BLE] scan ended (%d); keyboard not found\n",reason);nextScanMs_=millis()+1500;}}
+void BleKeyboardHost::scanEnded(int reason){scanning_=false;if(!shouldConnect_){Serial.printf("[BLE] scan ended (%d); waiting for keyboard\n",reason);nextScanMs_=millis()+750;}}
 InputKey BleKeyboardHost::usageToKey(uint8_t u){if(u==0x28)return InputKey::Enter;if(u==0x29)return InputKey::Escape;if(u==0x2A)return InputKey::Backspace;return InputKey::Character;}
 char BleKeyboardHost::usageToAscii(uint8_t u,uint8_t m){
  bool s=m&0x22;
@@ -52,35 +52,54 @@ void BleKeyboardHost::startScan(){
  if(!NimBLEDevice::getScan()->start(8000,false,true)){scanning_=false;Serial.println("[BLE] scan failed to start");nextScanMs_=millis()+2000;}
 }
 bool BleKeyboardHost::connectTarget(){
- if(!target_)return false;connecting_=true;shouldConnect_=false;if(!client_)client_=NimBLEDevice::createClient();
+ if(!target_)return false;
+ connecting_=true;shouldConnect_=false;
+ if(!client_)client_=NimBLEDevice::createClient();
+
  Serial.printf("[BLE] connecting to %s...\n",target_->getAddress().toString().c_str());
- if(!client_->connect(target_)){Serial.println("[BLE] connection failed");connecting_=false;nextScanMs_=millis()+2000;return false;}
- connected_=true;connecting_=false;Serial.println("[BLE] connected; discovering services...");
- auto services=client_->getServices(true);
- Serial.printf("[BLE] discovered %u service(s):\n",(unsigned)services.size());
- for(const auto& entry:services){
-  auto* service=entry;
-  Serial.printf("[BLE] service %s\n",service->getUUID().toString().c_str());
+ if(!client_->connect(target_)){
+  Serial.println("[BLE] connection failed; will retry");
+  connecting_=false;
+  delete target_;target_=nullptr;
+  nextScanMs_=millis()+1000;
+  return false;
  }
- Serial.println("[BLE] checking HID service 1812...");
- subscribeHidReports();return true;
+
+ delete target_;target_=nullptr;
+ Serial.println("[BLE] link connected; establishing security...");
+ bool secured=client_->secureConnection();
+ Serial.println(secured?"[BLE] security established":"[BLE] security not established; trying HID anyway");
+
+ if(!client_->isConnected()){
+  Serial.println("[BLE] link dropped during setup; will retry");
+  connecting_=false;connected_=false;nextScanMs_=millis()+1000;
+  return false;
+ }
+
+ Serial.println("[BLE] discovering HID service...");
+ if(!subscribeHidReports()){
+  Serial.println("[BLE] HID setup failed; disconnecting and retrying");
+  client_->disconnect();
+  connecting_=false;connected_=false;nextScanMs_=millis()+1500;
+  return false;
+ }
+
+ connecting_=false;connected_=true;
+ Serial.println("[BLE] keyboard ready");
+ return true;
 }
-void BleKeyboardHost::subscribeHidReports(){
- auto* hid=client_->getService(kHidService);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found in discovered services");return;}
- size_t n=0;for(auto* c:hid->getCharacteristics(true)){
-  Serial.printf("[BLE] HID characteristic %s props=%s%s%s\n",
-    c->getUUID().toString().c_str(),
-    c->canRead()?"R":"",
-    c->canNotify()?"N":"",
-    c->canIndicate()?"I":"");
+bool BleKeyboardHost::subscribeHidReports(){
+ auto* hid=client_->getService(kHidService);
+ if(!hid){Serial.println("[BLE] HID service 1812 not found");return false;}
+
+ size_t n=0;
+ for(auto* c:hid->getCharacteristics(true)){
   if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){
-    ++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());
+   ++n;
   }
  }
  Serial.printf("[BLE] HID subscriptions: %u\n",(unsigned)n);
- Serial.println("[BLE] requesting security/bonding...");
- if(client_->secureConnection()) Serial.println("[BLE] security established");
- else Serial.println("[BLE] WARNING: security request failed");
+ return n>0;
 }
 void BleKeyboardHost::notifyCallback(NimBLERemoteCharacteristic*,uint8_t* d,size_t n,bool){if(instance_)instance_->handleKeyboardReport(d,n);}
 void BleKeyboardHost::handleKeyboardReport(const uint8_t* d,size_t n){
@@ -88,7 +107,7 @@ void BleKeyboardHost::handleKeyboardReport(const uint8_t* d,size_t n){
  if(n<8)return;uint8_t m=d[0];for(size_t i=2;i<8;++i){uint8_t u=d[i];if(!u)continue;InputKey k=usageToKey(u);if(k==InputKey::Character){char a=usageToAscii(u,m);if(a)push(InputEvent(k,a));}else push(InputEvent(k));}
 }
 void BleKeyboardHost::update(){
- if(!initialized_)return;if(connected_&&client_&&!client_->isConnected()){connected_=false;Serial.println("[BLE] keyboard disconnected");nextScanMs_=millis()+1000;}
+ if(!initialized_)return;if(connected_&&client_&&!client_->isConnected()){connected_=false;Serial.println("[BLE] keyboard disconnected; waiting for it to return");nextScanMs_=millis()+500;}
  if(shouldConnect_&&!connecting_&&!connected_)connectTarget();
  if(!connected_&&!connecting_&&!scanning_&&(int32_t)(millis()-nextScanMs_)>=0)startScan();
 }
