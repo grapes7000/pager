@@ -59,14 +59,14 @@ bool BleKeyboardHost::connectTarget(){
  auto services=client_->getServices(true);
  Serial.printf("[BLE] discovered %u service(s):\n",(unsigned)services.size());
  for(const auto& entry:services){
-  auto* service=entry.second;
+  auto* service=entry;
   Serial.printf("[BLE] service %s\n",service->getUUID().toString().c_str());
  }
  Serial.println("[BLE] checking HID service 1812...");
  subscribeHidReports();return true;
 }
 void BleKeyboardHost::subscribeHidReports(){
- auto* hid=client_->getService(kHidService,false);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found in discovered services");return;}
+ auto* hid=client_->getService(kHidService);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found in discovered services");return;}
  size_t n=0;for(auto* c:hid->getCharacteristics(true)){if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());}}
  Serial.printf("[BLE] HID subscriptions: %u\n",(unsigned)n);
 }
