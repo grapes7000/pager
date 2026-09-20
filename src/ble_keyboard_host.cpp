@@ -55,10 +55,18 @@ bool BleKeyboardHost::connectTarget(){
  if(!target_)return false;connecting_=true;shouldConnect_=false;if(!client_)client_=NimBLEDevice::createClient();
  Serial.printf("[BLE] connecting to %s...\n",target_->getAddress().toString().c_str());
  if(!client_->connect(target_)){Serial.println("[BLE] connection failed");connecting_=false;nextScanMs_=millis()+2000;return false;}
- connected_=true;connecting_=false;Serial.println("[BLE] connected; discovering HID service...");subscribeHidReports();return true;
+ connected_=true;connecting_=false;Serial.println("[BLE] connected; discovering services...");
+ auto services=client_->getServices(true);
+ Serial.printf("[BLE] discovered %u service(s):\n",(unsigned)services.size());
+ for(const auto& entry:services){
+  auto* service=entry.second;
+  Serial.printf("[BLE] service %s\n",service->getUUID().toString().c_str());
+ }
+ Serial.println("[BLE] checking HID service 1812...");
+ subscribeHidReports();return true;
 }
 void BleKeyboardHost::subscribeHidReports(){
- auto* hid=client_->getService(kHidService);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found");return;}
+ auto* hid=client_->getService(kHidService,false);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found in discovered services");return;}
  size_t n=0;for(auto* c:hid->getCharacteristics(true)){if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());}}
  Serial.printf("[BLE] HID subscriptions: %u\n",(unsigned)n);
 }
