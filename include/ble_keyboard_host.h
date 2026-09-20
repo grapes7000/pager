@@ -22,7 +22,7 @@ class BleKeyboardHost : public KeyboardInput {
   NimBLEClient* client_=nullptr;
   void startScan();
   bool connectTarget();
-  void subscribeHidReports();
+  bool subscribeHidReports();
   void handleKeyboardReport(const uint8_t* data,size_t length);
   void push(InputEvent event);
   static void notifyCallback(NimBLERemoteCharacteristic*,uint8_t*,size_t,bool);
