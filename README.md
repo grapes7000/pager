@@ -1,13 +1,14 @@
 # Pager
 
-ESP32-based wireless hardware messenger.
+ESP32-based two-way wireless hardware messenger.
 
 ## Prototype hardware
 
 - ESP32-WROOM dev board
 - 128x64 SH1106 I2C OLED at 0x3C
 - KY-040 rotary encoder
-- BLE HID keyboard (tested: 518BT / `Bluetooth Keyboard`)
+- BLE HID keyboard
+- ESP-NOW direct pager-to-pager link
 
 | Device | ESP32 |
 | --- | --- |
@@ -23,90 +24,85 @@ ESP32-based wireless hardware messenger.
 
 GPIO34/35 are input-only and have no internal pull resistors; this prototype relies on the KY-040 module's pull-ups.
 
-## Current UI
+## Messaging
+
+The two pagers now discover each other directly over **ESP-NOW** on Wi-Fi channel 6. No router, hotspot, SSID, password, or internet connection is required.
+
+Each pager broadcasts a small discovery packet every two seconds. Once it hears the other logical pager ID, it learns that ESP32's Wi-Fi MAC and adds it as an ESP-NOW unicast peer. Text messages are then sent directly to that peer.
+
+The application protocol provides:
+
+- fixed logical identities (`Pager1` and `Pager2`)
+- automatic peer discovery; no hard-coded ESP32 Wi-Fi MAC addresses
+- 160-character message payloads
+- application-level ACKs
+- retry after a lost ACK or temporarily unavailable peer
+- an eight-message outbound queue
+- duplicate suppression using boot-session ID + message ID
+- malformed packet validation before anything reaches the UI
+
+If one pager is off, composed messages stay queued in RAM. When the other pager comes back and discovery resumes, the oldest pending message is retried until its ACK arrives. The current queue is volatile, so pending messages do not survive a reboot yet.
+
+**Security note:** the current pager-to-pager ESP-NOW transport is not application-encrypted. ESP-NOW frames are unencrypted in this first direct-link implementation. Add authenticated encryption before treating radio traffic as private.
+
+Useful serial messages:
+
+```text
+[LINK] ready id=1 name=Pager1 channel=6 mac=...
+[LINK] peer discovered: ...
+[LINK] queued message 1; pending=1
+[LINK] sent message 1; awaiting ACK
+[LINK] delivered message 1
+[LINK] received message 1 (... bytes)
+```
+
+## UI
 
 The encoder scrolls a three-message inbox viewport. Unread messages are marked with `*`. When selection rests on an unread message for 900 ms, it is marked read and the unread counter decreases.
 
-The UI consumes a transport-independent `Message` model so Bluetooth keyboard, Wi-Fi, nRF24, or relay transports can be added without rewriting the display layer.
+Press the encoder button to compose. Type with the pager's BLE keyboard and press Enter to send. Escape or another encoder press cancels. Incoming ESP-NOW messages are added to the inbox as unread.
 
-## BLE keyboard setup and pairing
+The old seeded demo messages have been removed; a freshly flashed pager starts with an empty inbox.
 
-The keyboard is **BLE HID / HID over GATT (HOGP)**, not Bluetooth Classic HID. This distinction matters: using a Classic HID host causes SDP failures and Classic inquiry may never see the keyboard.
+## BLE keyboards
 
-The working Linux identification procedure was:
+Both build environments include the hardened BLE-HID reconnect behavior. If a configured keyboard is off or out of range, its pager keeps scanning and automatically reconnects when the keyboard returns.
 
-```bash
-bluetoothctl
-scan on
-```
+- `pager1`: original `Bluetooth Keyboard`, matching the known `E8:74:76:2D:CF:D*` address range.
+- `pager2`: K808 at `41:83:6B:99:22:04`.
 
-Put the keyboard into pairing/discoverable mode. When it appears, note its address, then inspect it:
+The keyboards use BLE HID / HID over GATT (service UUID `0x1812`). NimBLE-Arduino acts as the BLE central/client. `ESP32-BLE-Keyboard` is the wrong direction for this project because it makes the ESP32 itself a keyboard peripheral.
 
-```text
-info E8:74:76:2D:CF:DB
-```
-
-For the tested 518BT keyboard, BlueZ reported:
-
-```text
-Name: Bluetooth Keyboard
-Address: E8:74:76:2D:CF:DB
-Address type: random
-Appearance: 0x03c1
-Icon: input-keyboard
-LegacyPairing: no
-UUID: Human Interface Device (00001812-0000-1000-8000-00805f9b34fb)
-```
-
-The important proof is service UUID **0x1812**, the BLE Human Interface Device service. The firmware therefore uses **NimBLE-Arduino as a BLE central/client** and subscribes to HID report notifications. Do not use `ESP32-BLE-Keyboard`: that library makes the ESP32 act as a keyboard peripheral, which is the opposite direction.
-
-### Adding another keyboard/device
-
-Do **not** repeat the Classic-vs-BLE debugging process. Identify the new device with `bluetoothctl` first:
-
-1. Run `bluetoothctl`, then `scan on`.
-2. Put only the keyboard you want to add into pairing mode.
-3. Copy its Bluetooth address exactly.
-4. Run `info <ADDRESS>`.
-5. Confirm it exposes `00001812-0000-1000-8000-00805f9b34fb` / Human Interface Device.
-6. Update `kKeyboardAddress` in `src/ble_keyboard_host.cpp` to that address.
-7. Build, upload, and monitor. Put the keyboard back into pairing mode while Pager scans.
-
-The firmware intentionally matches the **exact known address**, not every device advertising HID service 0x1812. During testing another nearby device, `KS03~EE01BE`, also advertised 0x1812 and Pager connected to it first. Exact-address matching prevents that.
-
-Expected successful serial path:
-
-```text
-Starting BLE HID keyboard discovery...
-[BLE] starting BLE HID keyboard client...
-[BLE] scanning for HID service 1812 / known keyboard...
-[BLE] seen: e8:74:76:2d:cf:db name=Bluetooth Keyboard
-[BLE] keyboard found: e8:74:76:2d:cf:db HID=1812
-[BLE] connecting to e8:74:76:2d:cf:db...
-[BLE] connected; discovering HID service...
-```
-
-If the address appears as `(random)` in BlueZ, that is normal for this keyboard. Use the exact address discovered for that device. If a future keyboard does **not** expose UUID 0x1812, do not assume this BLE-HID implementation supports it; identify its transport/profile before changing the firmware.
-
-## Build
+## Build and flash
 
 This repo deliberately uses its own Python 3.13 virtual environment and PlatformIO 6.1.18. Do not modify or downgrade the system PlatformIO/Python installation for this project.
 
+Pager #1:
+
 ```bash
-git pull
-.pio-venv/bin/pio run
-.pio-venv/bin/pio run -t upload
-.pio-venv/bin/pio device monitor -b 115200
+.pio-venv/bin/pio run -e pager1 -t upload --upload-port /dev/ttyUSB0
+```
+
+Pager #2:
+
+```bash
+.pio-venv/bin/pio run -e pager2 -t upload --upload-port /dev/ttyUSB0
+```
+
+Serial monitor:
+
+```bash
+.pio-venv/bin/pio device monitor -p /dev/ttyUSB0 -b 115200
 ```
 
 The configured flash layout is 2 MB and uses `partitions.csv` (one application slot, no OTA update slot).
 
-Press the encoder button to compose, then type using the BLE keyboard or serial monitor. Enter adds the message to the local inbox and logs it over serial; wireless message delivery is not implemented. Escape or another encoder press cancels.
+## Tests
 
-Run the host regression checks (requires Bash and g++) with:
+Run the host regression checks with:
 
 ```bash
 bash tests/run_host_tests.sh
 ```
 
-These check composer boundaries, message capacity, selection/read timing, and button debounce using simulated time, pins, and display calls. BLE pairing/reconnection and physical encoder/display behavior still require board testing.
+These cover the existing composer, message capacity, selection/read timing, and encoder debounce logic. ESP-NOW delivery/retry and BLE pairing/reconnection require hardware testing on the two physical pagers.

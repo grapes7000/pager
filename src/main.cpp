@@ -8,6 +8,7 @@
 #include "message_view.h"
 #include "composer.h"
 #include "ble_keyboard_host.h"
+#include "pager_link.h"
 
 Adafruit_SH1106G display(PagerConfig::OLED_WIDTH,PagerConfig::OLED_HEIGHT,&Wire,-1);
 Encoder encoder;
@@ -15,16 +16,29 @@ MessageStore messages;
 MessageView view(display);
 Composer composer(display);
 BleKeyboardHost keyboard;
-uint32_t nextMessageId=100;
-
-void seed(){messages.add({1,"Lakota","where are u?",0,true,true});messages.add({2,"Brooke","building the tiny pager rn",0,false,false});messages.add({3,"Lakota","this message is long enough to preview",0,true,true});messages.add({4,"Brooke","encoder scrolling eats",0,false,false});messages.add({5,"Lakota","okay text me when it works",0,true,true});}
+PagerLink link;
+uint32_t nextMessageId=1;
 
 void sendComposed(){
   String body;
   if(composer.submit(body)){
-    messages.add({nextMessageId++,"Brooke",body,millis(),false,false});
+    uint32_t id=nextMessageId++;
+    bool queued=link.queueMessage(id,body);
+    messages.add({id,link.deviceName(),body,millis(),false,false});
     view.begin(messages);
-    Serial.printf("SEND %s\n",body.c_str());
+    Serial.printf("SEND id=%lu queued=%s pending=%u text=%s\n",
+                  (unsigned long)id,queued?"yes":"no",
+                  (unsigned)link.pendingCount(),body.c_str());
+  }
+}
+
+void receiveLinkedMessages(){
+  PagerIncomingMessage incoming;
+  while(link.popReceived(incoming)){
+    messages.add({incoming.id,link.peerName(),incoming.body,millis(),true,true});
+    view.begin(messages);
+    Serial.printf("RECV id=%lu from=%s text=%s\n",
+                  (unsigned long)incoming.id,link.peerName(),incoming.body.c_str());
   }
 }
 
@@ -56,10 +70,13 @@ void setup(){
   delay(100);
   if(!display.begin(PagerConfig::OLED_ADDRESS,true)){Serial.println("ERR OLED init failed");while(true)delay(1000);}
   encoder.begin();
-  seed();
   view.begin(messages);
   view.render(messages);
-  Serial.println("OK PAGER/0.3");
+  Serial.printf("OK PAGER/0.4 %s\n",link.deviceName());
+
+  Serial.println("Starting direct pager link...");
+  if(!link.begin())Serial.println("[LINK] disabled after initialization failure");
+
   Serial.println("Starting BLE HID keyboard discovery...");
   keyboard.begin();
 }
@@ -67,6 +84,9 @@ void setup(){
 void loop(){
   encoder.update();
   keyboard.update();
+  link.update();
+  receiveLinkedMessages();
+
   // Rotation while composing must not scroll the inbox after returning to it.
   int d=encoder.consumeDelta();
 
