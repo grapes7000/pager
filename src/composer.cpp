@@ -25,7 +25,8 @@ bool Composer::submit(String& text){
 void Composer::drawWrappedText(){
   constexpr int charsPerLine=20;
   constexpr int visibleLines=4;
-  const int totalLines=max(1,(int)((text_.length()+charsPerLine-1)/charsPerLine));
+  // Include the insertion position, including a new row at exact line boundaries.
+  const int totalLines=(int)(text_.length()/charsPerLine)+1;
   const int firstLine=max(0,totalLines-visibleLines);
   for(int row=0;row<visibleLines;++row){
     const int line=firstLine+row;
