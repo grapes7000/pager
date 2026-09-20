@@ -1,6 +1,9 @@
 #include "ble_keyboard_host.h"
 namespace {
-constexpr char kKeyboardAddress[]="e8:74:76:2d:cf:db";
+#ifndef PAGER_KEYBOARD_ADDRESS
+#define PAGER_KEYBOARD_ADDRESS "e8:74:76:2d:cf:db"
+#endif
+constexpr char kKeyboardAddress[]=PAGER_KEYBOARD_ADDRESS;
 const NimBLEUUID kHidService((uint16_t)0x1812);
 class ScanCallbacks:public NimBLEScanCallbacks{
  public:
@@ -26,7 +29,7 @@ char BleKeyboardHost::usageToAscii(uint8_t u,uint8_t m){
  switch(u){case 0x2c:return ' ';case 0x2d:return s?'_':'-';case 0x2e:return s?'+':'=';case 0x2f:return s?'{':'[';case 0x30:return s?'}':']';case 0x31:return s?'|':'\\';case 0x33:return s?':':';';case 0x34:return s?'"':39;case 0x35:return s?'~':96;case 0x36:return s?'<':',';case 0x37:return s?'>':'.';case 0x38:return s?'?':'/';default:return 0;}
 }
 void BleKeyboardHost::begin(){
- instance_=this;Serial.println("[BLE] starting BLE HID keyboard client...");
+ instance_=this;Serial.printf("[BLE] starting BLE HID keyboard client; target=%s\n",kKeyboardAddress);
  NimBLEDevice::init("Pager Keyboard Host");
  NimBLEDevice::setSecurityAuth(true,true,true);NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
  auto* s=NimBLEDevice::getScan();s->setScanCallbacks(&scanCallbacks,false);s->setActiveScan(true);s->setInterval(45);s->setWindow(30);
@@ -34,7 +37,7 @@ void BleKeyboardHost::begin(){
 }
 void BleKeyboardHost::startScan(){
  if(!initialized_||scanning_||connecting_||connected_)return;
- Serial.println("[BLE] scanning for HID service 1812 / known keyboard...");scanning_=true;shouldConnect_=false;
+ Serial.printf("[BLE] scanning for configured keyboard %s...\n",kKeyboardAddress);scanning_=true;shouldConnect_=false;
  if(!NimBLEDevice::getScan()->start(8000,false,true)){scanning_=false;Serial.println("[BLE] scan failed to start");nextScanMs_=millis()+2000;}
 }
 bool BleKeyboardHost::connectTarget(){
