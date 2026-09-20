@@ -16,29 +16,29 @@ MessageStore messages;
 MessageView view(display);
 Composer composer(display);
 BleKeyboardHost keyboard;
-PagerLink link;
+PagerLink pagerLink;
 uint32_t nextMessageId=1;
 
 void sendComposed(){
   String body;
   if(composer.submit(body)){
     uint32_t id=nextMessageId++;
-    bool queued=link.queueMessage(id,body);
-    messages.add({id,link.deviceName(),body,millis(),false,false});
+    bool queued=pagerLink.queueMessage(id,body);
+    messages.add({id,pagerLink.deviceName(),body,millis(),false,false});
     view.begin(messages);
     Serial.printf("SEND id=%lu queued=%s pending=%u text=%s\n",
                   (unsigned long)id,queued?"yes":"no",
-                  (unsigned)link.pendingCount(),body.c_str());
+                  (unsigned)pagerLink.pendingCount(),body.c_str());
   }
 }
 
 void receiveLinkedMessages(){
   PagerIncomingMessage incoming;
-  while(link.popReceived(incoming)){
-    messages.add({incoming.id,link.peerName(),incoming.body,millis(),true,true});
+  while(pagerLink.popReceived(incoming)){
+    messages.add({incoming.id,pagerLink.peerName(),incoming.body,millis(),true,true});
     view.begin(messages);
     Serial.printf("RECV id=%lu from=%s text=%s\n",
-                  (unsigned long)incoming.id,link.peerName(),incoming.body.c_str());
+                  (unsigned long)incoming.id,pagerLink.peerName(),incoming.body.c_str());
   }
 }
 
@@ -72,10 +72,10 @@ void setup(){
   encoder.begin();
   view.begin(messages);
   view.render(messages);
-  Serial.printf("OK PAGER/0.4 %s\n",link.deviceName());
+  Serial.printf("OK PAGER/0.4 %s\n",pagerLink.deviceName());
 
   Serial.println("Starting direct pager link...");
-  if(!link.begin())Serial.println("[LINK] disabled after initialization failure");
+  if(!pagerLink.begin())Serial.println("[LINK] disabled after initialization failure");
 
   Serial.println("Starting BLE HID keyboard discovery...");
   keyboard.begin();
@@ -84,7 +84,7 @@ void setup(){
 void loop(){
   encoder.update();
   keyboard.update();
-  link.update();
+  pagerLink.update();
   receiveLinkedMessages();
 
   // Rotation while composing must not scroll the inbox after returning to it.
