@@ -67,8 +67,20 @@ bool BleKeyboardHost::connectTarget(){
 }
 void BleKeyboardHost::subscribeHidReports(){
  auto* hid=client_->getService(kHidService);if(!hid){Serial.println("[BLE] ERROR: HID service 1812 not found in discovered services");return;}
- size_t n=0;for(auto* c:hid->getCharacteristics(true)){if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());}}
+ size_t n=0;for(auto* c:hid->getCharacteristics(true)){
+  Serial.printf("[BLE] HID characteristic %s props=%s%s%s\n",
+    c->getUUID().toString().c_str(),
+    c->canRead()?"R":"",
+    c->canNotify()?"N":"",
+    c->canIndicate()?"I":"");
+  if((c->canNotify()||c->canIndicate())&&c->subscribe(c->canNotify(),notifyCallback,true)){
+    ++n;Serial.printf("[BLE] subscribed %s\n",c->getUUID().toString().c_str());
+  }
+ }
  Serial.printf("[BLE] HID subscriptions: %u\n",(unsigned)n);
+ Serial.println("[BLE] requesting security/bonding...");
+ if(client_->secureConnection()) Serial.println("[BLE] security established");
+ else Serial.println("[BLE] WARNING: security request failed");
 }
 void BleKeyboardHost::notifyCallback(NimBLERemoteCharacteristic*,uint8_t* d,size_t n,bool){if(instance_)instance_->handleKeyboardReport(d,n);}
 void BleKeyboardHost::handleKeyboardReport(const uint8_t* d,size_t n){
