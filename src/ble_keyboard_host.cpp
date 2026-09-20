@@ -5,13 +5,24 @@ namespace {
 #endif
 constexpr char kKeyboardAddress[]=PAGER_KEYBOARD_ADDRESS;
 const NimBLEUUID kHidService((uint16_t)0x1812);
+
+bool addressMatches(const std::string& seen, const char* configured) {
+ if(seen.size()!=strlen(configured))return false;
+ for(size_t i=0;i<seen.size();++i){
+  char a=seen[i],b=configured[i];
+  if(a>='A'&&a<='Z')a+='a'-'A';
+  if(b>='A'&&b<='Z')b+='a'-'A';
+  if(a!=b)return false;
+ }
+ return true;
+}
 class ScanCallbacks:public NimBLEScanCallbacks{
  public:
  void onResult(const NimBLEAdvertisedDevice* d) override{
   auto* h=BleKeyboardHost::instance_; if(!h)return;
   Serial.printf("[BLE] seen: %s",d->getAddress().toString().c_str());
   if(d->haveName())Serial.printf(" name=%s",d->getName().c_str()); Serial.println();
-  bool addr=d->getAddress().toString()==std::string(kKeyboardAddress);
+  bool addr=addressMatches(d->getAddress().toString(),kKeyboardAddress);
   bool hid=d->isAdvertisingService(kHidService);
   if(addr){h->setTarget(d);Serial.printf("[BLE] keyboard found: %s%s\n",d->getAddress().toString().c_str(),hid?" HID=1812":"");NimBLEDevice::getScan()->stop();}
  }
